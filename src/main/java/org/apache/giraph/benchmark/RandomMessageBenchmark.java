@@ -28,9 +28,11 @@ import org.apache.giraph.graph.EdgeListVertex;
 import org.apache.giraph.graph.GiraphJob;
 import org.apache.giraph.graph.WorkerContext;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.DoubleWritable;
 import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.log4j.Logger;
@@ -335,7 +337,14 @@ public class RandomMessageBenchmark implements Tool {
         "flusher",
         true,
         "Number of flush threads");
-
+    options.addOption("if",
+        "inputFormat",
+        true,
+        "Graph input format");
+    options.addOption("ip",
+        "inputPath",
+        true,
+        "Graph input path");
     HelpFormatter formatter = new HelpFormatter();
     if (args.length == 0) {
       formatter.printHelp(getClass().getName(), options, true);
@@ -376,15 +385,8 @@ public class RandomMessageBenchmark implements Tool {
     GiraphJob job = new GiraphJob(getConf(), getClass().getName());
     job.getConfiguration().setInt(GiraphJob.CHECKPOINT_FREQUENCY, 0);
     job.setVertexClass(RandomMessageVertex.class);
-    job.setVertexInputFormatClass(PseudoRandomVertexInputFormat.class);
     job.setWorkerContextClass(RandomMessageBenchmarkWorkerContext.class);
     job.setWorkerConfiguration(workers, workers, 100.0f);
-    job.getConfiguration().setLong(
-        PseudoRandomVertexInputFormat.AGGREGATE_VERTICES,
-        Long.parseLong(cmd.getOptionValue('V')));
-    job.getConfiguration().setLong(
-        PseudoRandomVertexInputFormat.EDGES_PER_VERTEX,
-        Long.parseLong(cmd.getOptionValue('e')));
     job.getConfiguration().setInt(
         SUPERSTEP_COUNT,
         Integer.parseInt(cmd.getOptionValue('s')));
@@ -407,6 +409,40 @@ public class RandomMessageBenchmark implements Tool {
       job.getConfiguration().setInt(GiraphJob.MSG_NUM_FLUSH_THREADS,
           Integer.parseInt(cmd.getOptionValue('f')));
     }
+    if (!cmd.hasOption("if") && !cmd.hasOption("ip")) {
+      if (!cmd.hasOption('V')) {
+        LOG.info("Need to set the aggregate vertices (-V)");
+        return -1;
+      }
+      if (!cmd.hasOption('e')) {
+        LOG.info("Need to set the number of edges " +
+            "per vertex (-e)");
+        return -1;
+      }
+      job.getConfiguration().setLong(
+          PseudoRandomVertexInputFormat.AGGREGATE_VERTICES,
+          Long.parseLong(cmd.getOptionValue('V')));
+      job.getConfiguration().setLong(
+          PseudoRandomVertexInputFormat.EDGES_PER_VERTEX,
+          Long.parseLong(cmd.getOptionValue('e')));
+      job.setVertexInputFormatClass(PseudoRandomVertexInputFormat.class);
+    } else {
+      if (!cmd.hasOption("if")) {
+        LOG.info("Need to set intput format (-if)");
+        return -1;
+      }
+      if (!cmd.hasOption("ip")) {
+        LOG.info("Need to set intput path (-ip)");
+        return -1;
+      }
+      job.setVertexInputFormatClass(
+          Class.forName(cmd.getOptionValue("if")));
+      if (cmd.hasOption("ip")) {
+        FileInputFormat.addInputPath(job.getInternalJob(),
+            new Path(cmd.getOptionValue("ip")));
+      }
+    }
+
     if (job.run(isVerbose)) {
       return 0;
     } else {

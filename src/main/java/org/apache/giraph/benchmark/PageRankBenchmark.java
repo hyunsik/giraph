@@ -27,8 +27,10 @@ import org.apache.giraph.graph.BspUtils;
 import org.apache.giraph.graph.EdgeListVertex;
 import org.apache.giraph.graph.GiraphJob;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.DoubleWritable;
 import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.log4j.Logger;
@@ -87,6 +89,14 @@ public class PageRankBenchmark extends EdgeListVertex<
         "vertexClass",
         true,
         "Vertex class (0 for Vertex, 1 for EdgeListVertex)");
+    options.addOption("if",
+        "inputFormat",
+        true,
+        "Graph input format");
+    options.addOption("ip",
+        "inputPath",
+        true,
+        "Graph input path");
     HelpFormatter formatter = new HelpFormatter();
     if (args.length == 0) {
       formatter.printHelp(getClass().getName(), options, true);
@@ -126,14 +136,8 @@ public class PageRankBenchmark extends EdgeListVertex<
     }
     LOG.info("Using class " +
         BspUtils.getVertexClass(job.getConfiguration()).getName());
-    job.setVertexInputFormatClass(PseudoRandomVertexInputFormat.class);
     job.setWorkerConfiguration(workers, workers, 100.0f);
-    job.getConfiguration().setLong(
-        PseudoRandomVertexInputFormat.AGGREGATE_VERTICES,
-        Long.parseLong(cmd.getOptionValue('V')));
-    job.getConfiguration().setLong(
-        PseudoRandomVertexInputFormat.EDGES_PER_VERTEX,
-        Long.parseLong(cmd.getOptionValue('e')));
+
     job.getConfiguration().setInt(
         PageRankComputation.SUPERSTEP_COUNT,
         Integer.parseInt(cmd.getOptionValue('s')));
@@ -146,6 +150,41 @@ public class PageRankBenchmark extends EdgeListVertex<
       job.getConfiguration().setInt(
           PageRankComputation.SUPERSTEP_COUNT,
           Integer.parseInt(cmd.getOptionValue('s')));
+    }
+
+    if (!cmd.hasOption("if") && !cmd.hasOption("ip")) {
+      if (!cmd.hasOption('V')) {
+        LOG.info("Need to set the aggregate vertices (-V)");
+        return -1;
+      }
+      if (!cmd.hasOption('e')) {
+        LOG.info("Need to set the number of edges " +
+            "per vertex (-e)");
+        return -1;
+      }
+      job.setVertexInputFormatClass(PseudoRandomVertexInputFormat.class);
+      job.getConfiguration().setLong(
+          PseudoRandomVertexInputFormat.AGGREGATE_VERTICES,
+          Long.parseLong(cmd.getOptionValue('V')));
+      job.getConfiguration().setLong(
+          PseudoRandomVertexInputFormat.EDGES_PER_VERTEX,
+          Long.parseLong(cmd.getOptionValue('e')));
+    } else {
+      if (!cmd.hasOption("if")) {
+        LOG.info("Need to set intput format (-if)");
+        return -1;
+      }
+      if (!cmd.hasOption("ip")) {
+        LOG.info("Need to set intput path (-ip)");
+        return -1;
+      }
+
+      job.setVertexInputFormatClass(Class.forName(
+          cmd.getOptionValue("if")));
+      if (cmd.hasOption("ip")) {
+        FileInputFormat.addInputPath(job.getInternalJob(),
+            new Path(cmd.getOptionValue("ip")));
+      }
     }
     if (job.run(isVerbose)) {
       return 0;
