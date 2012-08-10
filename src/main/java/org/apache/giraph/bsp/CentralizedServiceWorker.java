@@ -22,10 +22,12 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+
+import org.apache.giraph.comm.ServerData;
+import org.apache.giraph.graph.WorkerAggregatorUsage;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
 
-import org.apache.giraph.graph.AggregatorUsage;
 import org.apache.giraph.graph.Vertex;
 import org.apache.giraph.graph.GraphMapper;
 import org.apache.giraph.graph.partition.Partition;
@@ -46,7 +48,7 @@ import org.apache.giraph.graph.WorkerContext;
 @SuppressWarnings("rawtypes")
 public interface CentralizedServiceWorker<I extends WritableComparable,
   V extends Writable, E extends Writable, M extends Writable>
-  extends CentralizedService<I, V, E, M>, AggregatorUsage {
+  extends CentralizedService<I, V, E, M>, WorkerAggregatorUsage {
   /**
    * Get the worker information
    *
@@ -169,4 +171,11 @@ public interface CentralizedServiceWorker<I extends WritableComparable,
    * Operations that will be called if there is a failure by a worker.
    */
   void failureCleanup();
+
+  /**
+   * Get server data
+   *
+   * @return Server data
+   */
+  ServerData<I, V, E, M> getServerData();
 }

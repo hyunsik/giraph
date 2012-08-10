@@ -18,12 +18,18 @@
 
 package org.apache.giraph.comm;
 
+import org.apache.giraph.comm.messages.SimpleMessageStore;
+import org.apache.giraph.graph.GiraphJob;
+import org.apache.giraph.utils.MockUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.mapreduce.Mapper.Context;
+import org.jboss.netty.channel.socket.DefaultSocketChannelConfig;
 import org.junit.Test;
 
+import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -42,12 +48,15 @@ public class ConnectionTest {
    */
   @Test
   public void connectSingleClientServer() throws IOException {
+    Configuration conf = new Configuration();
     @SuppressWarnings("rawtypes")
     Context context = mock(Context.class);
+    when(context.getConfiguration()).thenReturn(conf);
 
-    Configuration conf = new Configuration();
     ServerData<IntWritable, IntWritable, IntWritable, IntWritable> serverData =
-        new ServerData<IntWritable, IntWritable, IntWritable, IntWritable>(conf);
+        new ServerData<IntWritable, IntWritable, IntWritable, IntWritable>
+            (SimpleMessageStore.newFactory(
+                MockUtils.mockServiceGetVertexPartitionOwner(1), conf));
     NettyServer<IntWritable, IntWritable, IntWritable, IntWritable> server =
         new NettyServer<IntWritable, IntWritable, IntWritable, IntWritable>(
             conf, serverData);
@@ -56,7 +65,7 @@ public class ConnectionTest {
     NettyClient<IntWritable, IntWritable, IntWritable, IntWritable> client =
         new NettyClient<IntWritable, IntWritable, IntWritable,
         IntWritable>(context);
-    client.connectAllAdddresses(Collections.singleton(server.getMyAddress()));
+    client.connectAllAddresses(Collections.singleton(server.getMyAddress()));
 
     client.stop();
     server.stop();
@@ -69,12 +78,15 @@ public class ConnectionTest {
    */
   @Test
   public void connectOneClientToThreeServers() throws IOException {
+    Configuration conf = new Configuration();
     @SuppressWarnings("rawtypes")
     Context context = mock(Context.class);
+    when(context.getConfiguration()).thenReturn(conf);
 
-    Configuration conf = new Configuration();
     ServerData<IntWritable, IntWritable, IntWritable, IntWritable> serverData =
-        new ServerData<IntWritable, IntWritable, IntWritable, IntWritable>(conf);
+        new ServerData<IntWritable, IntWritable, IntWritable, IntWritable>
+            (SimpleMessageStore.newFactory(
+                MockUtils.mockServiceGetVertexPartitionOwner(1), conf));
 
     NettyServer<IntWritable, IntWritable, IntWritable, IntWritable> server1 =
         new NettyServer<IntWritable, IntWritable, IntWritable, IntWritable>(
@@ -94,7 +106,7 @@ public class ConnectionTest {
         IntWritable>(context);
     List<InetSocketAddress> serverAddresses =
         new ArrayList<InetSocketAddress>();
-    client.connectAllAdddresses(serverAddresses);
+    client.connectAllAddresses(serverAddresses);
 
     client.stop();
     server1.stop();
@@ -109,13 +121,15 @@ public class ConnectionTest {
    */
   @Test
   public void connectThreeClientsToOneServer() throws IOException {
+    Configuration conf = new Configuration();
     @SuppressWarnings("rawtypes")
     Context context = mock(Context.class);
+    when(context.getConfiguration()).thenReturn(conf);
 
-    Configuration conf = new Configuration();
     ServerData<IntWritable, IntWritable, IntWritable, IntWritable> serverData =
-        new ServerData<IntWritable, IntWritable, IntWritable,
-            IntWritable>(conf);
+        new ServerData<IntWritable, IntWritable, IntWritable, IntWritable>
+            (SimpleMessageStore.newFactory(
+                MockUtils.mockServiceGetVertexPartitionOwner(1), conf));
     NettyServer<IntWritable, IntWritable, IntWritable, IntWritable> server =
         new NettyServer<IntWritable, IntWritable, IntWritable, IntWritable>(
             conf, serverData);
@@ -124,15 +138,15 @@ public class ConnectionTest {
     NettyClient<IntWritable, IntWritable, IntWritable, IntWritable> client1 =
         new NettyClient<IntWritable, IntWritable, IntWritable,
         IntWritable>(context);
-    client1.connectAllAdddresses(Collections.singleton(server.getMyAddress()));
+    client1.connectAllAddresses(Collections.singleton(server.getMyAddress()));
     NettyClient<IntWritable, IntWritable, IntWritable, IntWritable> client2 =
         new NettyClient<IntWritable, IntWritable, IntWritable,
         IntWritable>(context);
-    client2.connectAllAdddresses(Collections.singleton(server.getMyAddress()));
+    client2.connectAllAddresses(Collections.singleton(server.getMyAddress()));
     NettyClient<IntWritable, IntWritable, IntWritable, IntWritable> client3 =
         new NettyClient<IntWritable, IntWritable, IntWritable,
         IntWritable>(context);
-    client3.connectAllAdddresses(Collections.singleton(server.getMyAddress()));
+    client3.connectAllAddresses(Collections.singleton(server.getMyAddress()));
 
     client1.stop();
     client2.stop();

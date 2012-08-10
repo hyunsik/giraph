@@ -828,17 +828,18 @@ public abstract class BasicRPCCommunications<I extends WritableComparable,
   }
 
   @Override
-  public final void addEdge(I vertexIndex, Edge<I, E> edge) {
+  public final void addEdge(I sourceVertexId, I targetVertexId, E edgeValue) {
+    Edge<I, E> edge = new Edge<I, E>(targetVertexId, edgeValue);
     if (LOG.isDebugEnabled()) {
       LOG.debug("addEdge: Adding edge " + edge);
     }
     synchronized (inVertexMutationsMap) {
       VertexMutations<I, V, E, M> vertexMutations = null;
-      if (!inVertexMutationsMap.containsKey(vertexIndex)) {
+      if (!inVertexMutationsMap.containsKey(sourceVertexId)) {
         vertexMutations = new VertexMutations<I, V, E, M>();
-        inVertexMutationsMap.put(vertexIndex, vertexMutations);
+        inVertexMutationsMap.put(sourceVertexId, vertexMutations);
       } else {
-        vertexMutations = inVertexMutationsMap.get(vertexIndex);
+        vertexMutations = inVertexMutationsMap.get(sourceVertexId);
       }
       vertexMutations.addEdge(edge);
     }
@@ -1023,7 +1024,7 @@ public abstract class BasicRPCCommunications<I extends WritableComparable,
     }
     CommunicationsInterface<I, V, E, M> rpcProxy =
         peerConnections.get(addr).getRPCProxy();
-    rpcProxy.addEdge(destVertex, edge);
+    rpcProxy.addEdge(destVertex, edge.getTargetVertexId(), edge.getValue());
   }
 
   @Override
@@ -1238,11 +1239,16 @@ public abstract class BasicRPCCommunications<I extends WritableComparable,
       }
       VertexMutations<I, V, E, M> vertexMutations =
           inVertexMutationsMap.get(vertexIndex);
+      boolean receivedMessages =
+          messages != null && !Iterables.isEmpty(messages);
       Vertex<I, V, E, M> vertex =
           vertexResolver.resolve(vertexIndex,
               originalVertex,
               vertexMutations,
-              messages);
+              receivedMessages);
+      if (vertex != null && receivedMessages) {
+        service.assignMessagesToVertex(vertex, messages);
+      }
       if (LOG.isDebugEnabled()) {
         LOG.debug("prepareSuperstep: Resolved vertex index " +
             vertexIndex + " with original vertex " +

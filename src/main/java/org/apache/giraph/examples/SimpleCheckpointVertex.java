@@ -24,10 +24,13 @@ import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.PosixParser;
 import org.apache.giraph.aggregators.LongSumAggregator;
+import org.apache.giraph.graph.DefaultMasterCompute;
 import org.apache.giraph.graph.Edge;
 import org.apache.giraph.graph.EdgeListVertex;
 import org.apache.giraph.graph.GiraphJob;
 import org.apache.giraph.graph.WorkerContext;
+import org.apache.giraph.io.GeneratedVertexInputFormat;
+import org.apache.giraph.io.IdWithValueTextOutputFormat;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.FloatWritable;
@@ -67,9 +70,6 @@ public class SimpleCheckpointVertex extends
     SimpleCheckpointVertexWorkerContext workerContext =
         (SimpleCheckpointVertexWorkerContext) getWorkerContext();
 
-    LongSumAggregator sumAggregator = (LongSumAggregator)
-        getAggregator(LongSumAggregator.class.getName());
-
     boolean enableFault = workerContext.getEnableFault();
     int supersteps = workerContext.getSupersteps();
 
@@ -86,10 +86,12 @@ public class SimpleCheckpointVertex extends
       voteToHalt();
       return;
     }
-    LOG.info("compute: " + sumAggregator);
-    sumAggregator.aggregate(getId().get());
-    LOG.info("compute: sum = " +
-        sumAggregator.getAggregatedValue().get() +
+    long sumAgg = this.<LongWritable>getAggregatedValue(
+        LongSumAggregator.class.getName()).get();
+    LOG.info("compute: " + sumAgg);
+    aggregate(LongSumAggregator.class.getName(),
+        new LongWritable(getId().get()));
+    LOG.info("compute: sum = " + sumAgg +
         " for vertex " + getId());
     float msgValue = 0.0f;
     for (FloatWritable message : messages) {
@@ -139,11 +141,6 @@ public class SimpleCheckpointVertex extends
     @Override
     public void preApplication()
       throws InstantiationException, IllegalAccessException {
-      registerAggregator(LongSumAggregator.class.getName(),
-          LongSumAggregator.class);
-      LongSumAggregator sumAggregator = (LongSumAggregator)
-          getAggregator(LongSumAggregator.class.getName());
-      sumAggregator.setAggregatedValue(0);
       supersteps = getContext().getConfiguration()
           .getInt(SUPERSTEP_COUNT, supersteps);
       enableFault = getContext().getConfiguration()
@@ -152,15 +149,13 @@ public class SimpleCheckpointVertex extends
 
     @Override
     public void postApplication() {
-      LongSumAggregator sumAggregator = (LongSumAggregator)
-          getAggregator(LongSumAggregator.class.getName());
-      FINAL_SUM = sumAggregator.getAggregatedValue().get();
+      FINAL_SUM = this.<LongWritable>getAggregatedValue(
+          LongSumAggregator.class.getName()).get();
       LOG.info("FINAL_SUM=" + FINAL_SUM);
     }
 
     @Override
     public void preSuperstep() {
-      useAggregator(LongSumAggregator.class.getName());
     }
 
     @Override
@@ -219,8 +214,9 @@ public class SimpleCheckpointVertex extends
     GiraphJob bspJob = new GiraphJob(getConf(), getClass().getName());
     bspJob.setVertexClass(getClass());
     bspJob.setVertexInputFormatClass(GeneratedVertexInputFormat.class);
-    bspJob.setVertexOutputFormatClass(SimpleTextVertexOutputFormat.class);
+    bspJob.setVertexOutputFormatClass(IdWithValueTextOutputFormat.class);
     bspJob.setWorkerContextClass(SimpleCheckpointVertexWorkerContext.class);
+    bspJob.setMasterComputeClass(SimpleCheckpointVertexMasterCompute.class);
     int minWorkers = Integer.parseInt(cmd.getOptionValue('w'));
     int maxWorkers = Integer.parseInt(cmd.getOptionValue('w'));
     bspJob.setWorkerConfiguration(minWorkers, maxWorkers, 100.0f);
@@ -239,6 +235,20 @@ public class SimpleCheckpointVertex extends
       return 0;
     } else {
       return -1;
+    }
+  }
+
+  /**
+   * Master compute associated with {@link SimpleCheckpointVertex}.
+   * It registers required aggregators.
+   */
+  public static class SimpleCheckpointVertexMasterCompute extends
+      DefaultMasterCompute {
+    @Override
+    public void initialize() throws InstantiationException,
+        IllegalAccessException {
+      registerAggregator(LongSumAggregator.class.getName(),
+          LongSumAggregator.class);
     }
   }
 

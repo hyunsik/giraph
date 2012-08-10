@@ -56,9 +56,10 @@ public class NettyWorkerClientServer<I extends WritableComparable,
    */
   public NettyWorkerClientServer(Mapper<?, ?, ?, ?>.Context context,
       CentralizedServiceWorker<I, V, E, M> service) {
-    client = new NettyWorkerClient<I, V, E, M>(context, service);
     server = new NettyWorkerServer<I, V, E, M>(context.getConfiguration(),
-                                               service);
+        service);
+    client = new NettyWorkerClient<I, V, E, M>(context, service,
+       ((NettyWorkerServer<I, V, E, M>) server).getServerData());
   }
 
   @Override
@@ -128,6 +129,11 @@ public class NettyWorkerClientServer<I extends WritableComparable,
   public Map<Integer, Collection<Vertex<I, V, E, M>>>
   getInPartitionVertexMap() {
     return server.getInPartitionVertexMap();
+  }
+
+  @Override
+  public ServerData<I, V, E, M> getServerData() {
+    return server.getServerData();
   }
 
   @Override

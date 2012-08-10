@@ -18,11 +18,13 @@
 
 package org.apache.giraph.comm;
 
+import org.apache.giraph.comm.messages.SimpleMessageStore;
 import org.apache.giraph.graph.Edge;
 import org.apache.giraph.graph.EdgeListVertex;
 import org.apache.giraph.graph.GiraphJob;
 import org.apache.giraph.graph.Vertex;
 import org.apache.giraph.graph.VertexMutations;
+import org.apache.giraph.utils.MockUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.Writable;
@@ -34,6 +36,7 @@ import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
@@ -74,9 +77,6 @@ public class RequestTest {
 
   @Before
   public void setUp() throws IOException {
-    @SuppressWarnings("rawtypes")
-    Context context = mock(Context.class);
-
     // Setup the conf
     conf = new Configuration();
     conf.setClass(GiraphJob.VERTEX_CLASS, TestVertex.class, Vertex.class);
@@ -89,18 +89,23 @@ public class RequestTest {
     conf.setClass(GiraphJob.MESSAGE_VALUE_CLASS,
         IntWritable.class, Writable.class);
 
+    @SuppressWarnings("rawtypes")
+    Context context = mock(Context.class);
+    when(context.getConfiguration()).thenReturn(conf);
+
     // Start the service
     serverData =
-        new ServerData<IntWritable, IntWritable, IntWritable,
-            IntWritable>(conf);
+        new ServerData<IntWritable, IntWritable, IntWritable, IntWritable>
+            (SimpleMessageStore.newFactory(
+                MockUtils.mockServiceGetVertexPartitionOwner(1), conf));
     server =
         new NettyServer<IntWritable, IntWritable, IntWritable, IntWritable>(
             conf, serverData);
     server.start();
     client =
-        new NettyClient<IntWritable, IntWritable, IntWritable,
-        IntWritable>(context);
-    client.connectAllAdddresses(Collections.singleton(server.getMyAddress()));
+        new NettyClient<IntWritable, IntWritable, IntWritable, IntWritable>
+            (context);
+    client.connectAllAddresses(Collections.singleton(server.getMyAddress()));
   }
 
   @Test
@@ -173,15 +178,16 @@ public class RequestTest {
     server.stop();
 
     // Check the output
-    ConcurrentHashMap<IntWritable, Collection<IntWritable>> inVertexIdMessages =
-        serverData.getTransientMessages();
+    Iterable<IntWritable> vertices =
+        serverData.getIncomingMessageStore().getDestinationVertices();
     int keySum = 0;
     int messageSum = 0;
-    for (Entry<IntWritable, Collection<IntWritable>> entry :
-        inVertexIdMessages.entrySet()) {
-      keySum += entry.getKey().get();
-      synchronized (entry.getValue()) {
-        for (IntWritable message : entry.getValue()) {
+    for (IntWritable vertexId : vertices) {
+      keySum += vertexId.get();
+      Collection<IntWritable> messages =
+          serverData.getIncomingMessageStore().getVertexMessages(vertexId);
+      synchronized (messages) {
+        for (IntWritable message : messages) {
           messageSum += message.get();
         }
       }

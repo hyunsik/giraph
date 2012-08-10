@@ -159,11 +159,19 @@ under the License.
       <organization>Trend Micro</organization>
       <organizationUrl>http://www.trendmicro.com</organizationUrl>
     </developer>
+    <developer>
+      <id>apresta</id>
+      <name>Alessandro Presta</name>
+      <email>apresta@apache.org</email>
+      <timezone>-8</timezone>
+      <organization>Facebook</organization>
+      <organizationUrl>http://www.facebook.com</organizationUrl>
+    </developer>
   </developers>
 
   <properties>
     <compileSource>1.6</compileSource>
-    <hadoop.version>0.20.203.0</hadoop.version>
+    <forHadoop>for-hadoop-${hadoop.version}</forHadoop>
     <maven-compiler-plugin.version>2.3.2</maven-compiler-plugin.version>
     <maven-javadoc-plugin.version>2.6</maven-javadoc-plugin.version>
     <jackson.version>1.8.0</jackson.version>
@@ -173,7 +181,33 @@ under the License.
     <munge-maven-plugin.version>1.0</munge-maven-plugin.version>
   </properties>
 
+  <repositories>
+	<repository>
+      <snapshots>
+        <enabled>true</enabled>
+      </snapshots>
+      <releases>
+        <enabled>false</enabled>
+      </releases>
+      <id>apache snapshots</id>
+      <name>www.apache.org</name>
+      <url>https://repository.apache.org/content/repositories/snapshots</url>
+    </repository>
+    <repository>
+      <snapshots>
+        <enabled>false</enabled>
+      </snapshots>
+      <releases>
+        <enabled>true</enabled>
+      </releases>
+      <id>apache releases</id>
+      <name>www.apache.org</name>
+      <url>https://repository.apache.org/content/repositories/releases</url>
+    </repository>
+  </repositories>
+
   <build>
+    <finalName>giraph-${project.version}-${forHadoop}</finalName>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -262,7 +296,7 @@ under the License.
           <systemProperties>
             <property>
               <name>prop.jarLocation</name>
-              <value>target/giraph-${project.version}-jar-with-dependencies.jar</value>
+              <value>${basedir}/target/giraph-${project.version}-${forHadoop}-jar-with-dependencies.jar</value>
             </property>
           </systemProperties>
         </configuration>
@@ -402,7 +436,7 @@ under the License.
       <plugin>
         <groupId>org.apache.rat</groupId>
         <artifactId>apache-rat-plugin</artifactId>
-        <version>0.7</version>
+        <version>0.8</version>
         <executions>
           <execution>
             <phase>verify</phase>
@@ -423,8 +457,10 @@ under the License.
               <!-- source control and IDEs -->
               <exclude>.git/**</exclude>
               <exclude>.gitignore</exclude>
-              <exclude>.idea/**</exclude>
               <exclude>*.patch</exclude>
+              <exclude>.idea/**</exclude>
+              <exclude>**/*.iml</exclude>
+              <exclude>**/*.ipr</exclude>
            </excludes>
         </configuration>
       </plugin>
@@ -466,6 +502,9 @@ under the License.
       <activation>
         <activeByDefault>true</activeByDefault>
       </activation>
+      <properties>
+          <hadoop.version>0.20.203.0</hadoop.version>
+      </properties>
       <dependencies>
         <dependency>
           <groupId>org.apache.hadoop</groupId>
@@ -497,6 +536,7 @@ under the License.
         </plugins>
       </build>
     </profile>
+
     <profile>
       <id>hadoop_1.0</id>
       <activation>
@@ -539,6 +579,7 @@ under the License.
         </plugins>
       </build>
     </profile>
+
     <profile>
       <id>hadoop_non_secure</id>
        <activation>
@@ -592,6 +633,7 @@ under the License.
         </plugins>
       </build>
     </profile>
+
     <profile>
       <id>hadoop_facebook</id>
        <activation>
@@ -600,11 +642,14 @@ under the License.
           <value>facebook</value>
         </property>
       </activation>
+      <properties>
+        <hadoop.version>0.20.1</hadoop.version>
+      </properties>
       <dependencies>
         <dependency>
           <groupId>com.facebook.hadoop</groupId>
           <artifactId>hadoop-core</artifactId>
-          <version>0.20.1</version>
+          <version>${hadoop.version}</version>
           <type>jar</type>
           <scope>system</scope>
           <systemPath>${hadoop.jar.path}</systemPath>
@@ -625,7 +670,7 @@ under the License.
       <build>
         <resources>
           <resource>
-            <directory>src/main/java/org/apache/giraph/hadoop</directory>
+            <directory>${basedir}/src/main/java/org/apache/giraph/hadoop</directory>
             <excludes>
               <exclude>BspTokenSelector.java</exclude>
             </excludes>
@@ -669,7 +714,7 @@ under the License.
               <systemProperties>
                 <property>
                   <name>prop.jarLocation</name>
-                  <value>../target/giraph-${project.version}-jar-with-dependencies.jar</value>
+                  <value>${basedir}/target/giraph-${project.version}-${forHadoop}-jar-with-dependencies.jar</value>
                 </property>
               </systemProperties>
             </configuration>

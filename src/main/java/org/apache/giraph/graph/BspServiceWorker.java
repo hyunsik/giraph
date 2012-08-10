@@ -22,6 +22,7 @@ import org.apache.giraph.bsp.ApplicationState;
 import org.apache.giraph.bsp.CentralizedServiceWorker;
 import org.apache.giraph.comm.NettyWorkerClientServer;
 import org.apache.giraph.comm.RPCCommunications;
+import org.apache.giraph.comm.ServerData;
 import org.apache.giraph.comm.WorkerClientServer;
 import org.apache.giraph.comm.WorkerServer;
 import org.apache.giraph.graph.partition.Partition;
@@ -56,11 +57,11 @@ import net.iharder.Base64;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInput;
 import java.io.DataInputStream;
 import java.io.DataOutput;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -70,7 +71,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
-import java.util.TreeSet;
 
 /**
  * ZooKeeper-based implementation of {@link CentralizedServiceWorker}.
@@ -91,8 +91,6 @@ public class BspServiceWorker<I extends WritableComparable,
   private int inputSplitCount = -1;
   /** My process health znode */
   private String myHealthZnode;
-  /** List of aggregators currently in use */
-  private Set<String> aggregatorInUse = new TreeSet<String>();
   /** Worker info */
   private final WorkerInfo workerInfo;
   /** Worker graph partitioner */
@@ -107,8 +105,11 @@ public class BspServiceWorker<I extends WritableComparable,
       new HashMap<Integer, Partition<I, V, E, M>>();
   /** Have the partition exchange children (workers) changed? */
   private final BspEvent partitionExchangeChildrenChanged;
-  /** Max vertices per partition before sending */
-  private final int maxVerticesPerPartition;
+  /** Regulates the size of outgoing Collections of vertices read
+   * by the local worker during INPUT_SUPERSTEP that are to be
+   * transfered from <code>inputSplitCache</code> to the owner
+   * of their initial, master-assigned Partition.*/
+  private GiraphTransferRegulator transferRegulator;
   /** Worker Context */
   private final WorkerContext workerContext;
   /** Total vertices loaded */
@@ -126,7 +127,6 @@ public class BspServiceWorker<I extends WritableComparable,
    * @param context Mapper context
    * @param graphMapper Graph mapper
    * @param graphState Global graph state
-   * @throws UnknownHostException
    * @throws IOException
    * @throws InterruptedException
    */
@@ -140,10 +140,8 @@ public class BspServiceWorker<I extends WritableComparable,
     super(serverPortList, sessionMsecTimeout, context, graphMapper);
     partitionExchangeChildrenChanged = new PredicateLock(context);
     registerBspEvent(partitionExchangeChildrenChanged);
-    maxVerticesPerPartition =
-        getConfiguration().getInt(
-            GiraphJob.MAX_VERTICES_PER_PARTITION,
-            GiraphJob.MAX_VERTICES_PER_PARTITION_DEFAULT);
+    transferRegulator =
+        new GiraphTransferRegulator(getConfiguration());
     inputSplitMaxVertices =
         getConfiguration().getLong(
             GiraphJob.INPUT_SPLIT_MAX_VERTICES,
@@ -159,8 +157,11 @@ public class BspServiceWorker<I extends WritableComparable,
           new RPCCommunications<I, V, E, M>(context, this, graphState);
     }
     if (LOG.isInfoEnabled()) {
-      LOG.info("BspServiceWorker: maxVerticesPerPartition = " +
-          maxVerticesPerPartition + " useNetty = " + useNetty);
+      LOG.info("BspServiceWorker: maxVerticesPerTransfer = " +
+          transferRegulator.getMaxVerticesPerTransfer());
+      LOG.info("BspServiceWorker: maxEdgesPerTransfer = " +
+          transferRegulator.getMaxEdgesPerTransfer() +
+          " useNetty = " + useNetty);
     }
 
     workerInfo = new WorkerInfo(
@@ -185,21 +186,6 @@ public class BspServiceWorker<I extends WritableComparable,
    * @return True if healthy (always in this case).
    */
   public boolean isHealthy() {
-    return true;
-  }
-
-  /**
-   * Use an aggregator in this superstep.
-   *
-   * @param name Name of aggregator (should be unique)
-   * @return boolean (false when aggregator not registered)
-   */
-  public boolean useAggregator(String name) {
-    if (getAggregatorMap().get(name) == null) {
-      LOG.error("userAggregator: Aggregator=" + name + " not registered");
-      return false;
-    }
-    aggregatorInUse.add(name);
     return true;
   }
 
@@ -279,6 +265,7 @@ public class BspServiceWorker<I extends WritableComparable,
             " InputSplits are finished.");
       }
       if (finishedInputSplits == inputSplitPathList.size()) {
+        transferRegulator = null; // don't need this anymore
         return null;
       }
       // Wait for either a reservation to go away or a notification that
@@ -444,14 +431,13 @@ public class BspServiceWorker<I extends WritableComparable,
     VertexReader<I, V, E, M> vertexReader =
         vertexInputFormat.createVertexReader(inputSplit, getContext());
     vertexReader.initialize(inputSplit, getContext());
-    long vertexCount = 0;
-    long edgeCount = 0;
+    transferRegulator.clearCounters();
     while (vertexReader.nextVertex()) {
       Vertex<I, V, E, M> readerVertex =
           vertexReader.getCurrentVertex();
       if (readerVertex.getId() == null) {
         throw new IllegalArgumentException(
-            "loadVertices: Vertex reader returned a vertex " +
+            "readVerticesFromInputSplit: Vertex reader returned a vertex " +
                 "without an id!  - " + readerVertex);
       }
       if (readerVertex.getValue() == null) {
@@ -475,17 +461,16 @@ public class BspServiceWorker<I extends WritableComparable,
         LOG.warn("readVertices: Replacing vertex " + oldVertex +
             " with " + readerVertex);
       }
-      if (partition.getVertices().size() >= maxVerticesPerPartition) {
+      getContext().progress(); // do this before potential data transfer
+      transferRegulator.incrementCounters(partitionOwner, readerVertex);
+      if (transferRegulator.transferThisPartition(partitionOwner)) {
         commService.sendPartitionRequest(partitionOwner.getWorkerInfo(),
             partition);
         partition.getVertices().clear();
       }
-      ++vertexCount;
-      edgeCount += readerVertex.getNumEdges();
-      getContext().progress();
-
       ++totalVerticesLoaded;
       totalEdgesLoaded += readerVertex.getNumEdges();
+
       // Update status every half a million vertices
       if ((totalVerticesLoaded % 500000) == 0) {
         String status = "readVerticesFromInputSplit: Loaded " +
@@ -503,19 +488,21 @@ public class BspServiceWorker<I extends WritableComparable,
 
       // For sampling, or to limit outlier input splits, the number of
       // records per input split can be limited
-      if ((inputSplitMaxVertices > 0) &&
-          (vertexCount >= inputSplitMaxVertices)) {
+      if (inputSplitMaxVertices > 0 &&
+        transferRegulator.getTotalVertices() >=
+        inputSplitMaxVertices) {
         if (LOG.isInfoEnabled()) {
           LOG.info("readVerticesFromInputSplit: Leaving the input " +
               "split early, reached maximum vertices " +
-              vertexCount);
+              transferRegulator.getTotalVertices());
         }
         break;
       }
     }
     vertexReader.close();
 
-    return new VertexEdgeCount(vertexCount, edgeCount);
+    return new VertexEdgeCount(transferRegulator.getTotalVertices(),
+      transferRegulator.getTotalEdges());
   }
 
   @Override
@@ -686,57 +673,49 @@ public class BspServiceWorker<I extends WritableComparable,
     finishSuperstep(partitionStatsList);
   }
 
+  @Override
+  public <A extends Writable> void aggregate(String name, A value) {
+    AggregatorWrapper<? extends Writable> aggregator = getAggregator(name);
+    if (aggregator != null) {
+      ((AggregatorWrapper<A>) aggregator).aggregateCurrent(value);
+    } else {
+      throw new IllegalStateException("aggregate: Tried to aggregate value " +
+          "to unregistered aggregator " + name);
+    }
+  }
+
   /**
-   *  Marshal the aggregator values of to a JSONArray that will later be
-   *  aggregated by master.  Reset the 'use' of aggregators in the next
-   *  superstep
+   *  Marshal the aggregator values of the worker to a byte array that will
+   *  later be aggregated by master.
    *
    * @param superstep Superstep to marshall on
-   * @return JSON array of the aggreagtor values
+   * @return Byte array of the aggreagtor values
    */
-  private JSONArray marshalAggregatorValues(long superstep) {
-    JSONArray aggregatorArray = new JSONArray();
-    if ((superstep == INPUT_SUPERSTEP) || (aggregatorInUse.size() == 0)) {
-      return aggregatorArray;
+  private byte[] marshalAggregatorValues(long superstep) {
+    if (superstep == INPUT_SUPERSTEP) {
+      return new byte[0];
     }
 
-    for (String name : aggregatorInUse) {
-      try {
-        Aggregator<Writable> aggregator = getAggregatorMap().get(name);
-        ByteArrayOutputStream outputStream =
-            new ByteArrayOutputStream();
-        DataOutput output = new DataOutputStream(outputStream);
-        aggregator.getAggregatedValue().write(output);
-
-        JSONObject aggregatorObj = new JSONObject();
-        aggregatorObj.put(AGGREGATOR_NAME_KEY, name);
-        aggregatorObj.put(AGGREGATOR_CLASS_NAME_KEY,
-            aggregator.getClass().getName());
-        aggregatorObj.put(
-            AGGREGATOR_VALUE_KEY,
-            Base64.encodeBytes(outputStream.toByteArray()));
-        aggregatorArray.put(aggregatorObj);
-        if (LOG.isInfoEnabled()) {
-          LOG.info("marshalAggregatorValues: " +
-              "Found aggregatorObj " +
-              aggregatorObj + ", value (" +
-              aggregator.getAggregatedValue() + ")");
+    ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+    DataOutputStream output = new DataOutputStream(outputStream);
+    for (Entry<String, AggregatorWrapper<Writable>> entry :
+        getAggregatorMap().entrySet()) {
+      if (entry.getValue().isChanged()) {
+        try {
+          output.writeUTF(entry.getKey());
+          entry.getValue().getCurrentAggregatedValue().write(output);
+        } catch (IOException e) {
+          throw new IllegalStateException("Failed to marshall aggregator " +
+              "with IOException " + entry.getKey(), e);
         }
-      } catch (JSONException e) {
-        throw new IllegalStateException("Failed to marshall aggregator " +
-            "with JSONException " + name, e);
-      } catch (IOException e) {
-        throw new IllegalStateException("Failed to marshall aggregator " +
-            "with IOException " + name, e);
       }
     }
 
     if (LOG.isInfoEnabled()) {
-      LOG.info("marshalAggregatorValues: Finished assembling " +
-          "aggregator values in JSONArray - " + aggregatorArray);
+      LOG.info(
+          "marshalAggregatorValues: Finished assembling aggregator values");
     }
-    aggregatorInUse.clear();
-    return aggregatorArray;
+    return outputStream.toByteArray();
   }
 
   /**
@@ -745,13 +724,18 @@ public class BspServiceWorker<I extends WritableComparable,
    * @param superstep Superstep to get the aggregated values from
    */
   private void getAggregatorValues(long superstep) {
+    // prepare aggregators for reading and next superstep
+    for (AggregatorWrapper<Writable> aggregator :
+        getAggregatorMap().values()) {
+      aggregator.setPreviousAggregatedValue(aggregator.createInitialValue());
+      aggregator.resetCurrentAggregator();
+    }
     String mergedAggregatorPath =
         getMergedAggregatorPath(getApplicationAttempt(), superstep - 1);
-    JSONArray aggregatorArray = null;
+
+    byte[] aggregatorArray = null;
     try {
-      byte[] zkData =
-          getZkExt().getData(mergedAggregatorPath, false, null);
-      aggregatorArray = new JSONArray(new String(zkData));
+      aggregatorArray = getZkExt().getData(mergedAggregatorPath, false, null);
     } catch (KeeperException.NoNodeException e) {
       LOG.info("getAggregatorValues: no aggregators in " +
           mergedAggregatorPath + " on superstep " + superstep);
@@ -762,49 +746,58 @@ public class BspServiceWorker<I extends WritableComparable,
     } catch (InterruptedException e) {
       throw new IllegalStateException("Failed to get data for " +
           mergedAggregatorPath + " with InterruptedException", e);
-    } catch (JSONException e) {
-      throw new IllegalStateException("Failed to get data for " +
-          mergedAggregatorPath + " with JSONException", e);
     }
-    for (int i = 0; i < aggregatorArray.length(); ++i) {
+
+    DataInput input =
+        new DataInputStream(new ByteArrayInputStream(aggregatorArray));
+    int numAggregators = 0;
+
+    try {
+      numAggregators = input.readInt();
+    } catch (IOException e) {
+      throw new IllegalStateException("getAggregatorValues: " +
+          "Failed to decode data", e);
+    }
+
+    for (int i = 0; i < numAggregators; i++) {
       try {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("getAggregatorValues: " +
-              "Getting aggregators from " +
-              aggregatorArray.getJSONObject(i));
-        }
-        String aggregatorName = aggregatorArray.getJSONObject(i).
-            getString(AGGREGATOR_NAME_KEY);
-        Aggregator<Writable> aggregator =
+        String aggregatorName = input.readUTF();
+        String aggregatorClassName = input.readUTF();
+        AggregatorWrapper<Writable> aggregatorWrapper =
             getAggregatorMap().get(aggregatorName);
-        if (aggregator == null) {
-          continue;
+        if (aggregatorWrapper == null) {
+          try {
+            Class<? extends Aggregator<Writable>> aggregatorClass =
+                (Class<? extends Aggregator<Writable>>)
+                    Class.forName(aggregatorClassName);
+            aggregatorWrapper =
+                registerAggregator(aggregatorName, aggregatorClass, false);
+          } catch (ClassNotFoundException e) {
+            throw new IllegalStateException("Failed to create aggregator " +
+                aggregatorName + " of class " + aggregatorClassName +
+                " with ClassNotFoundException", e);
+          } catch (InstantiationException e) {
+            throw new IllegalStateException("Failed to create aggregator " +
+                aggregatorName + " of class " + aggregatorClassName +
+                " with InstantiationException", e);
+          } catch (IllegalAccessException e) {
+            throw new IllegalStateException("Failed to create aggregator " +
+                aggregatorName + " of class " + aggregatorClassName +
+                " with IllegalAccessException", e);
+          }
         }
-        Writable aggregatorValue = aggregator.getAggregatedValue();
-        InputStream input =
-            new ByteArrayInputStream(
-                Base64.decode(aggregatorArray.getJSONObject(i).
-                    getString(AGGREGATOR_VALUE_KEY)));
-        aggregatorValue.readFields(
-            new DataInputStream(input));
-        aggregator.setAggregatedValue(aggregatorValue);
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("getAggregatorValues: " +
-              "Got aggregator=" + aggregatorName + " value=" +
-              aggregatorValue);
-        }
-      } catch (JSONException e) {
-        throw new IllegalStateException("Failed to decode data for index " +
-            i + " with KeeperException", e);
+        Writable aggregatorValue = aggregatorWrapper.createInitialValue();
+        aggregatorValue.readFields(input);
+        aggregatorWrapper.setPreviousAggregatedValue(aggregatorValue);
       } catch (IOException e) {
-        throw new IllegalStateException("Failed to decode data for index " +
-            i + " with KeeperException", e);
+        throw new IllegalStateException(
+            "Failed to decode data for index " + i, e);
       }
     }
+
     if (LOG.isInfoEnabled()) {
       LOG.info("getAggregatorValues: Finished loading " +
-          mergedAggregatorPath + " with aggregator values " +
-          aggregatorArray);
+          mergedAggregatorPath);
     }
   }
 
@@ -982,7 +975,7 @@ public class BspServiceWorker<I extends WritableComparable,
           MemoryUtils.getRuntimeMemoryStats());
     }
 
-    JSONArray aggregatorValueArray =
+    byte[] aggregatorArray =
         marshalAggregatorValues(getSuperstep());
     Collection<PartitionStats> finalizedPartitionStats =
         workerGraphPartitioner.finalizePartitionStats(
@@ -994,7 +987,7 @@ public class BspServiceWorker<I extends WritableComparable,
     JSONObject workerFinishedInfoObj = new JSONObject();
     try {
       workerFinishedInfoObj.put(JSONOBJ_AGGREGATOR_VALUE_ARRAY_KEY,
-          aggregatorValueArray);
+          Base64.encodeBytes(aggregatorArray));
       workerFinishedInfoObj.put(JSONOBJ_PARTITION_STATS_KEY,
           Base64.encodeBytes(partitionStatsBytes));
       workerFinishedInfoObj.put(JSONOBJ_NUM_MESSAGES_KEY,
@@ -1172,6 +1165,8 @@ public class BspServiceWorker<I extends WritableComparable,
       LOG.warn("storeCheckpoint: Removed file " + verticesFilePath);
     }
 
+    boolean useNetty = getConfiguration().getBoolean(GiraphJob.USE_NETTY,
+        GiraphJob.USE_NETTY_DEFAULT);
     FSDataOutputStream verticesOutputStream =
         getFs().create(verticesFilePath);
     ByteArrayOutputStream metadataByteStream = new ByteArrayOutputStream();
@@ -1179,6 +1174,12 @@ public class BspServiceWorker<I extends WritableComparable,
     for (Partition<I, V, E, M> partition : workerPartitionMap.values()) {
       long startPos = verticesOutputStream.getPos();
       partition.write(verticesOutputStream);
+      // write messages
+      verticesOutputStream.writeBoolean(useNetty);
+      if (useNetty) {
+        getServerData().getCurrentMessageStore().writePartition(
+            verticesOutputStream, partition.getId());
+      }
       // Write the metadata for this partition
       // Format:
       // <index count>
@@ -1211,6 +1212,18 @@ public class BspServiceWorker<I extends WritableComparable,
 
   @Override
   public void loadCheckpoint(long superstep) {
+    if (getConfiguration().getBoolean(GiraphJob.USE_NETTY,
+        GiraphJob.USE_NETTY_DEFAULT)) {
+      try {
+        // clear old message stores
+        getServerData().getIncomingMessageStore().clearAll();
+        getServerData().getCurrentMessageStore().clearAll();
+      } catch (IOException e) {
+        throw new RuntimeException(
+            "loadCheckpoint: Failed to clear message stores ", e);
+      }
+    }
+
     // Algorithm:
     // Examine all the partition owners and load the ones
     // that match my hostname and id from the master designated checkpoint
@@ -1256,6 +1269,10 @@ public class BspServiceWorker<I extends WritableComparable,
                 " on " + partitionsFile);
           }
           partition.readFields(partitionsStream);
+          if (partitionsStream.readBoolean()) {
+            getServerData().getCurrentMessageStore().readFieldsForPartition(
+                partitionsStream, partitionId);
+          }
           partitionsStream.close();
           if (LOG.isInfoEnabled()) {
             LOG.info("loadCheckpoint: Loaded partition " +
@@ -1551,5 +1568,10 @@ public class BspServiceWorker<I extends WritableComparable,
     } else {
       return null;
     }
+  }
+
+  @Override
+  public ServerData<I, V, E, M> getServerData() {
+    return commService.getServerData();
   }
 }
