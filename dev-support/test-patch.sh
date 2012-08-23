@@ -580,7 +580,6 @@ buildAndInstall () {
 ###############################################################################
 ### Check there are no changes in the number of Findbugs warnings
 checkFindbugsWarnings () {
-  findbugs_version=`${FINDBUGS_HOME}/bin/findbugs -version`
   echo ""
   echo ""
   echo "======================================================================"
@@ -590,7 +589,8 @@ checkFindbugsWarnings () {
   echo "======================================================================"
   echo ""
   echo ""
-  
+  findbugs_version=`${FINDBUGS_HOME}/bin/findbugs -version`
+
   modules=$(findModules)
   rc=0
   for module in $modules;
