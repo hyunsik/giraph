@@ -12,7 +12,7 @@
 #   limitations under the License.
 
 
-#set -x
+set -x
 ulimit -n 1024
 
 ### Setup some variables.  
@@ -212,6 +212,15 @@ checkout () {
 
 ###############################################################################
 downloadPatch () {
+  echo ""
+  echo ""
+  echo "======================================================================"
+  echo "======================================================================"
+  echo "    Downloading patch for ${defect}."
+  echo "======================================================================"
+  echo "======================================================================"
+  echo ""
+  echo ""
   ### Download latest patch file (ignoring .htm and .html) when run from patch process
   if [[ $JENKINS == "true" ]] ; then
     $WGET -q -O $PATCH_DIR/jira http://issues.apache.org/jira/browse/$defect
@@ -262,23 +271,28 @@ verifyPatch () {
 }
 
 ###############################################################################
-buildWithoutPatch () {
+buildTrunk () {
   echo ""
   echo ""
   echo "======================================================================"
   echo "======================================================================"
-  echo " Pre-build trunk to verify trunk stability and javac warnings" 
+  echo " Pre-build trunk to verify trunk stability, javac, and javadoc warnings" 
   echo "======================================================================"
   echo "======================================================================"
   echo ""
   echo ""
   echo "Compiling $(pwd)"
-  echo "$MVN clean test -DskipTests > $PATCH_DIR/trunkWarnings.txt 2>&1"
-  $MVN clean test -DskipTests > $PATCH_DIR/trunkWarnings.txt 2>&1
+  echo "$MVN clean test -DskipTests > $PATCH_DIR/trunkJavacWarnings.txt 2>&1"
+  $MVN clean test -DskipTests > $PATCH_DIR/trunkJavacWarnings.txt 2>&1
   if [[ $? != 0 ]] ; then
     echo "Trunk compilation is broken?"
     cleanupAndExit 1
   fi
+
+  echo ""
+  echo "Generating Javadocs"
+  echo "$MVN test javadoc:javadoc -DskipTests > $PATCH_DIR/trunkJavadocsWarnings.txt 2>&1"
+  $MVN test javadoc:javadoc -DskipTests > $PATCH_DIR/trunkJavadocWarnings.txt 2>&1
 }
 
 ###############################################################################
@@ -392,7 +406,7 @@ checkJavadocWarnings () {
   echo ""
   echo "$MVN clean test javadoc:javadoc -DskipTests > $PATCH_DIR/patchJavadocWarnings.txt 2>&1"
   $MVN clean test javadoc:javadoc -DskipTests > $PATCH_DIR/patchJavadocWarnings.txt 2>&1
-  trunkJavadocWarnings=`$GREP '\[WARNING\]' $PATCH_DIR/trunkWarnings.txt | $AWK '/Javadoc Warnings/,EOF' | $GREP warning | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
+  trunkJavadocWarnings=`$GREP '\[WARNING\]' $PATCH_DIR/trunkJavadocWarnings.txt | $AWK '/Javadoc Warnings/,EOF' | $GREP warning | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
   patchJavadocWarnings=`$GREP '\[WARNING\]' $PATCH_DIR/patchJavadocWarnings.txt | $AWK '/Javadoc Warnings/,EOF' | $GREP warning | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
   echo ""
   echo ""
@@ -435,10 +449,12 @@ checkJavacWarnings () {
   fi
   ### Compare trunk and patch javac warning numbers
   if [[ -f $PATCH_DIR/patchJavacWarnings.txt ]] ; then
-    $GREP '\[WARNING\]' $PATCH_DIR/trunkWarnings.txt > $PATCH_DIR/filteredTrunkJavacWarnings.txt
+    $GREP '\[WARNING\]' $PATCH_DIR/trunkJavacWarnings.txt > $PATCH_DIR/filteredTrunkJavacWarnings.txt
     $GREP '\[WARNING\]' $PATCH_DIR/patchJavacWarnings.txt > $PATCH_DIR/filteredPatchJavacWarnings.txt
     trunkJavacWarnings=`cat $PATCH_DIR/filteredTrunkJavacWarnings.txt | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
     patchJavacWarnings=`cat $PATCH_DIR/filteredPatchJavacWarnings.txt | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
+    echo ""
+    echo ""
     echo "There appear to be $trunkJavacWarnings javac compiler warnings before the patch and $patchJavacWarnings javac compiler warnings after applying the patch."
     if [[ $patchJavacWarnings != "" && $trunkJavacWarnings != "" ]] ; then
       if [[ $patchJavacWarnings -gt $trunkJavacWarnings ]] ; then
@@ -473,7 +489,7 @@ checkReleaseAuditWarnings () {
   echo ""
   echo ""
   echo "$MVN apache-rat:check > $PATCH_DIR/patchReleaseAuditOutput.txt 2>&1"
-  $MVN apache-rat:check -D${PROJECT_NAME}PatchProcess > $PATCH_DIR/patchReleaseAuditOutput.txt 2>&1
+  $MVN apache-rat:check > $PATCH_DIR/patchReleaseAuditOutput.txt 2>&1
   find $BASEDIR -name rat.txt | xargs cat > $PATCH_DIR/patchReleaseAuditWarnings.txt
 
   ### Compare trunk and patch release audit warning numbers
@@ -515,8 +531,8 @@ checkStyle () {
   echo ""
   echo ""
   echo ""
-  echo "$MVN test checkstyle:checkstyle -DskipTests"
-  $MVN test checkstyle:checkstyle -DskipTests $PATCH_DIR/patchStyleErrors.txt 2>&1
+  echo "$MVN test checkstyle:checkstyle -DskipTests > $PATCH_DIR/patchStyleErrors.txt 2>&1"
+  $MVN test checkstyle:checkstyle -DskipTests > $PATCH_DIR/patchStyleErrors.txt 2>&1
 
   JIRA_COMMENT_FOOTER="Checkstyle results: $BUILD_URL/artifact/trunk/build/test/checkstyle-errors.html
 $JIRA_COMMENT_FOOTER"
@@ -805,8 +821,6 @@ if [[ $JENKINS == "true" ]] ; then
     exit 100
   fi
 fi
-buildWithoutPatch
-
 downloadPatch
 verifyPatch
 (( RESULT = RESULT + $? ))
@@ -814,6 +828,7 @@ if [[ $RESULT != 0 ]] ; then
   submitJiraComment 1
   cleanupAndExit 1
 fi
+buildTrunk
 checkAuthor
 
 if [[ $JENKINS == "true" ]] ; then
