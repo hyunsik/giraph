@@ -12,7 +12,7 @@
 #   limitations under the License.
 
 
-set -x
+#set -x
 ulimit -n 1024
 
 ### Setup some variables.  
@@ -417,13 +417,13 @@ checkJavadocWarnings () {
     ### if patch warning greater than trunk warning
     JIRA_COMMENT="$JIRA_COMMENT
 
-    -1 javadoc.  The javadoc tool appears to have generated `expr $(($patchJavadocWarnings-$trunkJavadocWarnings))` warning messages."
+    -1 javac.  The applied patch generated $patchJavadocWarnings javadoc warnings (more than the trunk's current $trunkJavadocWarnings warnings)."
     return 1
     fi
   fi
   JIRA_COMMENT="$JIRA_COMMENT
 
-    +1 javadoc.  The javadoc tool did not generate any warning messages."
+    +1 javadoc.  The applied patch does not increase the total number of javadoc warnings."
   return 0
 }
 
