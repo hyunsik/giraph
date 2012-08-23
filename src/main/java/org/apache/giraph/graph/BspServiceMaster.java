@@ -18,6 +18,7 @@
 
 package org.apache.giraph.graph;
 
+import com.google.common.collect.Sets;
 import org.apache.giraph.bsp.ApplicationState;
 import org.apache.giraph.bsp.BspInputFormat;
 import org.apache.giraph.bsp.CentralizedServiceMaster;
@@ -89,6 +90,8 @@ public class BspServiceMaster<I extends WritableComparable,
     implements CentralizedServiceMaster<I, V, E, M> {
   /** Counter group name for the Giraph statistics */
   public static final String GIRAPH_STATS_COUNTER_GROUP_NAME = "Giraph Stats";
+  /** Print worker names only if there are 10 workers left */
+  public static final int MAX_PRINTABLE_REMAINING_WORKERS = 10;
   /** Class logger */
   private static final Logger LOG = Logger.getLogger(BspServiceMaster.class);
   /** Superstep counter */
@@ -123,6 +126,8 @@ public class BspServiceMaster<I extends WritableComparable,
   private final int partitionLongTailMinPrint;
   /** Last finalized checkpoint */
   private long lastCheckpointedSuperstep = -1;
+  /** Worker wrote checkpoint */
+  private final BspEvent workerWroteCheckpoint;
   /** State of the superstep changed */
   private final BspEvent superstepStateChanged;
   /** Master graph partitioner */
@@ -134,6 +139,8 @@ public class BspServiceMaster<I extends WritableComparable,
   private AggregatorWriter aggregatorWriter;
   /** Master class */
   private MasterCompute masterCompute;
+  /** Limit locality information added to each InputSplit znode */
+  private final int localityLimit = 5;
 
   /**
    * Constructor for setting up the master.
@@ -149,6 +156,8 @@ public class BspServiceMaster<I extends WritableComparable,
       Mapper<?, ?, ?, ?>.Context context,
       GraphMapper<I, V, E, M> graphMapper) {
     super(serverPortList, sessionMsecTimeout, context, graphMapper);
+    workerWroteCheckpoint = new PredicateLock(context);
+    registerBspEvent(workerWroteCheckpoint);
     superstepStateChanged = new PredicateLock(context);
     registerBspEvent(superstepStateChanged);
 
@@ -338,8 +347,7 @@ public class BspServiceMaster<I extends WritableComparable,
     } catch (KeeperException e) {
       throw new IllegalStateException("getWorkers: KeeperException", e);
     } catch (InterruptedException e) {
-      throw new IllegalStateException("getWorkers: IllegalStateException"
-          , e);
+      throw new IllegalStateException("getWorkers: IllegalStateException", e);
     }
 
     try {
@@ -351,8 +359,7 @@ public class BspServiceMaster<I extends WritableComparable,
     } catch (KeeperException e) {
       throw new IllegalStateException("getWorkers: KeeperException", e);
     } catch (InterruptedException e) {
-      throw new IllegalStateException("getWorkers: IllegalStateException"
-          , e);
+      throw new IllegalStateException("getWorkers: IllegalStateException", e);
     }
 
     List<WorkerInfo> currentHealthyWorkerInfoList =
@@ -517,13 +524,29 @@ public class BspServiceMaster<I extends WritableComparable,
           "some workers will be not used");
     }
     String inputSplitPath = null;
+    String[] splitLocations;
+    InputSplit inputSplit;
+    StringBuilder locations;
     for (int i = 0; i < splitList.size(); ++i) {
       try {
         ByteArrayOutputStream byteArrayOutputStream =
             new ByteArrayOutputStream();
         DataOutput outputStream =
             new DataOutputStream(byteArrayOutputStream);
-        InputSplit inputSplit = splitList.get(i);
+        inputSplit = splitList.get(i);
+        splitLocations = inputSplit.getLocations();
+        locations = null;
+        if (splitLocations != null) {
+          int splitListLength =
+            Math.min(splitLocations.length, localityLimit);
+          locations = new StringBuilder();
+          for (String location : splitLocations) {
+            locations.append(location)
+              .append(--splitListLength > 0 ? "\t" : "");
+          }
+        }
+        Text.writeString(outputStream,
+            locations == null ? "" : locations.toString());
         Text.writeString(outputStream,
             inputSplit.getClass().getName());
         ((Writable) inputSplit).write(outputStream);
@@ -599,6 +622,9 @@ public class BspServiceMaster<I extends WritableComparable,
         getCheckpointBasePath(superstep) + CHECKPOINT_FINALIZED_POSTFIX;
     DataInputStream finalizedStream =
         fs.open(new Path(finalizedCheckpointPath));
+    GlobalStats globalStats = new GlobalStats();
+    globalStats.readFields(finalizedStream);
+    updateCounters(globalStats);
     int prefixFileCount = finalizedStream.readInt();
     for (int i = 0; i < prefixFileCount; ++i) {
       String metadataFilePath =
@@ -822,11 +848,11 @@ public class BspServiceMaster<I extends WritableComparable,
                     getConfiguration());
         for (Writable writable : writableList) {
           globalStats.addPartitionStats((PartitionStats) writable);
-          globalStats.addMessageCount(
-              workerFinishedInfoObj.getLong(
-                  JSONOBJ_NUM_MESSAGES_KEY));
           allPartitionStatsList.add((PartitionStats) writable);
         }
+        globalStats.addMessageCount(
+            workerFinishedInfoObj.getLong(
+                JSONOBJ_NUM_MESSAGES_KEY));
       } catch (JSONException e) {
         throw new IllegalStateException(
             "aggregateWorkerStats: JSONException", e);
@@ -1033,11 +1059,19 @@ public class BspServiceMaster<I extends WritableComparable,
     }
 
     // Format:
+    // <global statistics>
     // <number of files>
     // <used file prefix 0><used file prefix 1>...
     // <aggregator data length><aggregators as a serialized JSON byte array>
+    // <masterCompute data>
     FSDataOutputStream finalizedOutputStream =
         getFs().create(finalizedCheckpointPath);
+
+    String superstepFinishedNode =
+        getSuperstepFinishedPath(getApplicationAttempt(), superstep - 1);
+    finalizedOutputStream.write(
+        getZkExt().getData(superstepFinishedNode, false, null));
+
     finalizedOutputStream.writeInt(chosenWorkerInfoList.size());
     for (WorkerInfo chosenWorkerInfo : chosenWorkerInfoList) {
       String chosenWorkerInfoPrefix =
@@ -1306,6 +1340,12 @@ public class BspServiceMaster<I extends WritableComparable,
             " out of " + workerInfoList.size() +
             " workers finished on superstep " +
             getSuperstep() + " on path " + finishedWorkerPath);
+        if (workerInfoList.size() - finishedHostnameIdList.size() <
+            MAX_PRINTABLE_REMAINING_WORKERS) {
+          Set<String> remainingWorkers = Sets.newHashSet(hostnameIdList);
+          remainingWorkers.removeAll(finishedHostnameIdList);
+          LOG.info("barrierOnWorkerList: Waiting on " + remainingWorkers);
+        }
       }
       getContext().setStatus(getGraphMapper().getMapFunctions() + " - " +
           finishedHostnameIdList.size() +
@@ -1316,9 +1356,9 @@ public class BspServiceMaster<I extends WritableComparable,
         break;
       }
 
-      // Wait for a signal or no more than 60 seconds to progress
+      // Wait for a signal or no more than 30 seconds to progress
       // or else will continue.
-      event.waitMsecs(60 * 1000);
+      event.waitMsecs(30 * 1000);
       event.reset();
       getContext().progress();
 
@@ -1342,6 +1382,40 @@ public class BspServiceMaster<I extends WritableComparable,
     }
 
     return true;
+  }
+
+  /**
+   * Clean up old superstep data from Zookeeper
+   *
+   * @param removeableSuperstep Supersteo to clean up
+   * @throws InterruptedException
+   */
+  private void cleanUpOldSuperstep(long removeableSuperstep) throws
+      InterruptedException {
+    if (!(getConfiguration().getBoolean(
+        GiraphJob.KEEP_ZOOKEEPER_DATA,
+        GiraphJob.KEEP_ZOOKEEPER_DATA_DEFAULT)) &&
+        (removeableSuperstep >= 0)) {
+      String oldSuperstepPath =
+          getSuperstepPath(getApplicationAttempt()) + "/" +
+              removeableSuperstep;
+      try {
+        if (LOG.isInfoEnabled()) {
+          LOG.info("coordinateSuperstep: Cleaning up old Superstep " +
+              oldSuperstepPath);
+        }
+        getZkExt().deleteExt(oldSuperstepPath,
+            -1,
+            true);
+      } catch (KeeperException.NoNodeException e) {
+        LOG.warn("coordinateBarrier: Already cleaned up " +
+            oldSuperstepPath);
+      } catch (KeeperException e) {
+        throw new IllegalStateException(
+            "coordinateSuperstep: KeeperException on " +
+                "finalizing checkpoint", e);
+      }
+    }
   }
 
   @Override
@@ -1379,6 +1453,27 @@ public class BspServiceMaster<I extends WritableComparable,
     assignPartitionOwners(allPartitionStatsList,
         chosenWorkerInfoList,
         masterGraphPartitioner);
+
+    // Finalize the valid checkpoint file prefixes and possibly
+    // the aggregators.
+    if (checkpointFrequencyMet(getSuperstep())) {
+      String workerWroteCheckpointPath =
+          getWorkerWroteCheckpointPath(getApplicationAttempt(),
+              getSuperstep());
+      // first wait for all the workers to write their checkpoint data
+      if (!barrierOnWorkerList(workerWroteCheckpointPath,
+          chosenWorkerInfoList,
+          getWorkerWroteCheckpointEvent())) {
+        return SuperstepState.WORKER_FAILURE;
+      }
+      try {
+        finalizeCheckpoint(getSuperstep(), chosenWorkerInfoList);
+      } catch (IOException e) {
+        throw new IllegalStateException(
+            "coordinateSuperstep: IOException on finalizing checkpoint",
+            e);
+      }
+    }
 
     if (getSuperstep() == INPUT_SUPERSTEP) {
       // Coordinate the workers finishing sending their vertices to the
@@ -1437,57 +1532,9 @@ public class BspServiceMaster<I extends WritableComparable,
         getSuperstepFinishedPath(getApplicationAttempt(), getSuperstep());
     WritableUtils.writeToZnode(
         getZkExt(), superstepFinishedNode, -1, globalStats);
-    vertexCounter.increment(
-        globalStats.getVertexCount() -
-        vertexCounter.getValue());
-    finishedVertexCounter.increment(
-        globalStats.getFinishedVertexCount() -
-        finishedVertexCounter.getValue());
-    edgeCounter.increment(
-        globalStats.getEdgeCount() -
-        edgeCounter.getValue());
-    sentMessagesCounter.increment(
-        globalStats.getMessageCount() -
-        sentMessagesCounter.getValue());
+    updateCounters(globalStats);
 
-    // Finalize the valid checkpoint file prefixes and possibly
-    // the aggregators.
-    if (checkpointFrequencyMet(getSuperstep())) {
-      try {
-        finalizeCheckpoint(getSuperstep(), chosenWorkerInfoList);
-      } catch (IOException e) {
-        throw new IllegalStateException(
-            "coordinateSuperstep: IOException on finalizing checkpoint",
-            e);
-      }
-    }
-
-    // Clean up the old supersteps (always keep this one)
-    long removeableSuperstep = getSuperstep() - 1;
-    if (!(getConfiguration().getBoolean(
-        GiraphJob.KEEP_ZOOKEEPER_DATA,
-        GiraphJob.KEEP_ZOOKEEPER_DATA_DEFAULT)) &&
-        (removeableSuperstep >= 0)) {
-      String oldSuperstepPath =
-          getSuperstepPath(getApplicationAttempt()) + "/" +
-              removeableSuperstep;
-      try {
-        if (LOG.isInfoEnabled()) {
-          LOG.info("coordinateSuperstep: Cleaning up old Superstep " +
-              oldSuperstepPath);
-        }
-        getZkExt().deleteExt(oldSuperstepPath,
-            -1,
-            true);
-      } catch (KeeperException.NoNodeException e) {
-        LOG.warn("coordinateBarrier: Already cleaned up " +
-            oldSuperstepPath);
-      } catch (KeeperException e) {
-        throw new IllegalStateException(
-            "coordinateSuperstep: KeeperException on " +
-                "finalizing checkpoint", e);
-      }
-    }
+    cleanUpOldSuperstep(getSuperstep() - 1);
     incrCachedSuperstep();
     // Counter starts at zero, so no need to increment
     if (getSuperstep() > 0) {
@@ -1700,6 +1747,15 @@ public class BspServiceMaster<I extends WritableComparable,
   }
 
   /**
+   * Event that the master watches that denotes when a worker wrote checkpoint
+   *
+   * @return Event that denotes when a worker wrote checkpoint
+   */
+  public final BspEvent getWorkerWroteCheckpointEvent() {
+    return workerWroteCheckpoint;
+  }
+
+  /**
    * Event that the master watches that denotes if a worker has done something
    * that changes the state of a superstep (either a worker completed or died)
    *
@@ -1761,6 +1817,14 @@ public class BspServiceMaster<I extends WritableComparable,
       }
       superstepStateChanged.signal();
       foundEvent = true;
+    } else if (event.getPath().contains(WORKER_WROTE_CHECKPOINT_DIR) &&
+        event.getType() == EventType.NodeChildrenChanged) {
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("processEvent: Worker wrote checkpoint (node change) " +
+            "event - workerWroteCheckpoint signaled");
+      }
+      workerWroteCheckpoint.signal();
+      foundEvent = true;
     }
 
     return foundEvent;
@@ -1789,5 +1853,25 @@ public class BspServiceMaster<I extends WritableComparable,
               " registered " + name);
     }
     ((AggregatorWrapper<A>) aggregator).setCurrentAggregatedValue(value);
+  }
+
+  /**
+   * Set values of counters to match the ones from {@link GlobalStats}
+   *
+   * @param globalStats Global statistics which holds new counter values
+   */
+  private void updateCounters(GlobalStats globalStats) {
+    vertexCounter.increment(
+        globalStats.getVertexCount() -
+            vertexCounter.getValue());
+    finishedVertexCounter.increment(
+        globalStats.getFinishedVertexCount() -
+            finishedVertexCounter.getValue());
+    edgeCounter.increment(
+        globalStats.getEdgeCount() -
+            edgeCounter.getValue());
+    sentMessagesCounter.increment(
+        globalStats.getMessageCount() -
+            sentMessagesCounter.getValue());
   }
 }
