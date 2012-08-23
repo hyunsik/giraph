@@ -156,6 +156,13 @@ parseArgs() {
     echo "Running in Jenkins mode"
     defect=$PATCH_OR_DEFECT
     ECLIPSE_PROPERTY="-Declipse.home=$ECLIPSE_HOME"
+    
+    if [[ ! -e "$PATCH_DIR" ]] ; then
+      echo ""
+      echo "ERROR: No such the patch dir ($PATCH_DIR)"
+      echo ""
+      cleanupAndExit 0
+    fi
   else
     echo "Running in developer mode"
     JENKINS=false
@@ -257,6 +264,15 @@ downloadPatch () {
 
 ###############################################################################
 verifyPatch () {
+  echo ""
+  echo ""
+  echo "======================================================================"
+  echo "======================================================================"
+  echo "    Simulating the application of the downloaded patch"
+  echo "======================================================================"
+  echo "======================================================================"
+  echo ""
+  echo ""
   # Before building, check to make sure that the patch is valid
   ${PATCH} --dry-run -p0 < $PATCH_DIR/patch
   if [[ $? != 0 ]] ; then
@@ -276,7 +292,7 @@ buildTrunk () {
   echo ""
   echo "======================================================================"
   echo "======================================================================"
-  echo " Pre-build trunk to verify trunk stability, javac, and javadoc warnings" 
+  echo " Pre-build trunk to verify trunk stability and javac, javadoc warnings" 
   echo "======================================================================"
   echo "======================================================================"
   echo ""
@@ -417,7 +433,7 @@ checkJavadocWarnings () {
     ### if patch warning greater than trunk warning
     JIRA_COMMENT="$JIRA_COMMENT
 
-    -1 javac.  The applied patch generated $patchJavadocWarnings javadoc warnings (more than the trunk's current $trunkJavadocWarnings warnings)."
+    -1 javadoc.  The applied patch generated $patchJavadocWarnings javadoc warnings (more than the trunk's current $trunkJavadocWarnings warnings)."
     return 1
     fi
   fi
@@ -529,8 +545,6 @@ checkStyle () {
   echo "======================================================================"
   echo ""
   echo ""
-  echo ""
-  echo ""
   echo "$MVN test checkstyle:checkstyle -DskipTests > $PATCH_DIR/patchStyleErrors.txt 2>&1"
   $MVN test checkstyle:checkstyle -DskipTests > $PATCH_DIR/patchStyleErrors.txt 2>&1
 
@@ -543,6 +557,8 @@ $JIRA_COMMENT_FOOTER"
     if [[ -f target/checkstyle-result.xml ]] ; then
       $GREP '<ERROR' target/checkstyle-result.xml > $PATCH_DIR/filteredPatchedCheckstyleWarnings.txt
       patchStyleErrors=`cat $PATCH_DIR/filteredPatchCheckstyleWarnings.txt | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
+      echo ""
+      echo ""
       echo "There appear to be $patchCheckstyleWarnings checkstyle warnings after applying the patch."
     fi
   fi
