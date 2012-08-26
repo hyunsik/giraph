@@ -274,7 +274,7 @@ verifyPatch () {
   echo ""
   echo ""
   # Before building, check to make sure that the patch is valid
-  ${PATCH} --dry-run -p0 < $PATCH_DIR/patch
+  ${PATCH} -t --dry-run -p0 < $PATCH_DIR/patch
   if [[ $? != 0 ]] ; then
     echo "PATCH APPLICATION FAILED"
     JIRA_COMMENT="$JIRA_COMMENT
