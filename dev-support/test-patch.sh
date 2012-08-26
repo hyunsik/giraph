@@ -552,8 +552,8 @@ checkStyle () {
   echo "$MVN test checkstyle:checkstyle -DskipTests > $PATCH_DIR/patchStyleErrors.txt 2>&1"
   $MVN test checkstyle:checkstyle -DskipTests > $PATCH_DIR/patchStyleErrors.txt 2>&1
 
-  JIRA_COMMENT_FOOTER="Checkstyle results: $BUILD_URL/artifact/trunk/build/test/checkstyle-errors.html
-$JIRA_COMMENT_FOOTER"
+# JIRA_COMMENT_FOOTER="Checkstyle results: $BUILD_URL/artifact/trunk/build/test/checkstyle-errors.html
+# $JIRA_COMMENT_FOOTER"
 
   ### calculate actual patchStyleErrors
   patchStyleErrors=0
@@ -621,6 +621,9 @@ checkFindbugsWarnings () {
     (( rc = rc + $? ))
     cd -
   done
+
+  JIRA_COMMENT_FOOTER="Findbugs results: $BUILD_URL/findbugsResult
+  $JIRA_COMMENT_FOOTER"
 
   if [ $rc != 0 ] ; then
     JIRA_COMMENT="$JIRA_COMMENT
