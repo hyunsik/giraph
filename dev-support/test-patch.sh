@@ -420,8 +420,8 @@ checkJavadocWarnings () {
   echo "======================================================================"
   echo ""
   echo ""
-  echo "$MVN clean test javadoc:javadoc -DskipTests > $PATCH_DIR/patchJavadocWarnings.txt 2>&1"
-  $MVN clean test javadoc:javadoc -DskipTests > $PATCH_DIR/patchJavadocWarnings.txt 2>&1
+  echo "$MVN test javadoc:javadoc -DskipTests > $PATCH_DIR/patchJavadocWarnings.txt 2>&1"
+  $MVN test javadoc:javadoc -DskipTests > $PATCH_DIR/patchJavadocWarnings.txt 2>&1
 
   $GREP '\[WARNING\]' $PATCH_DIR/trunkJavadocWarnings.txt | $AWK '/Javadoc Warnings/,EOF' | $GREP warning > $PATCH_DIR/filteredTrunkJavadocWarnings.txt
   $GREP '\[WARNING\]' $PATCH_DIR/patchJavadocWarnings.txt | $AWK '/Javadoc Warnings/,EOF' | $GREP warning > $PATCH_DIR/filteredPatchJavadocWarnings.txt
@@ -616,16 +616,16 @@ checkFindbugsWarnings () {
     cd $module
     echo "  Running findbugs in $module"
     module_suffix=`basename ${module}`
-    echo "$MVN clean test findbugs:findbugs -DskipTests < /dev/null > $PATCH_DIR/patchFindBugsOutput${module_suffix}.txt 2>&1" 
-    $MVN clean test findbugs:findbugs -DskipTests < /dev/null > $PATCH_DIR/patchFindBugsOutput${module_suffix}.txt 2>&1
+    echo "$MVN test findbugs:findbugs -DskipTests < /dev/null > $PATCH_DIR/patchFindBugsOutput${module_suffix}.txt 2>&1" 
+    $MVN test findbugs:findbugs -DskipTests < /dev/null > $PATCH_DIR/patchFindBugsOutput${module_suffix}.txt 2>&1
     (( rc = rc + $? ))
     cd -
   done
 
-  JIRA_COMMENT_FOOTER="Findbugs results: $BUILD_URL/findbugsResult
-  $JIRA_COMMENT_FOOTER"
-
   if [ $rc != 0 ] ; then
+JIRA_COMMENT_FOOTER="Findbugs results: $BUILD_URL/findbugsResult
+$JIRA_COMMENT_FOOTER"
+
     JIRA_COMMENT="$JIRA_COMMENT
 
     -1 findbugs.  The patch appears to cause Findbugs (version ${findbugs_version}) to fail."
@@ -636,8 +636,8 @@ checkFindbugsWarnings () {
   for file in $(find $BASEDIR -name findbugsXml.xml)
   do
     relative_file=${file#$BASEDIR/} # strip leading $BASEDIR prefix
-    if [ ! $relative_file == "target/findbugsXml.xml" ]; then
-      module_suffix=${relative_file%/target/findbugsXml.xml} # strip trailing path
+    if [ ! $relative_file == "target/munged/findbugsXml.xml" ]; then
+      module_suffix=${relative_file%/target/munged/findbugsXml.xml} # strip trailing path
       module_suffix=`basename ${module_suffix}`
     fi
     
@@ -689,8 +689,8 @@ runTests () {
   do
     cd $module
     echo "  Running tests in $module"
-    echo "  $MVN clean install -fn"
-    $MVN clean install -fn
+    echo "  $MVN test -fn"
+    $MVN test -fn
     module_failed_tests=`find . -name 'TEST*.xml' | xargs $GREP  -l -E "<failure|<error" | sed -e "s|.*target/munged/surefire-reports/TEST-|                  |g" | sed -e "s|\.xml||g"`
     # With -fn mvn always exits with a 0 exit code.  Because of this we need to
     # find the errors instead of using the exit code.  We assume that if the build
