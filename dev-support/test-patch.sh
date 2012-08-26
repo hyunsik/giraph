@@ -688,7 +688,7 @@ runTests () {
     echo "  Running tests in $module"
     echo "  $MVN clean install -fn"
     $MVN clean install -fn
-    module_failed_tests=`find . -name 'TEST*.xml' | xargs $GREP  -l -E "<failure|<error" | sed -e "s|.*target/surefire-reports/TEST-|                  |g" | sed -e "s|\.xml||g"`
+    module_failed_tests=`find . -name 'TEST*.xml' | xargs $GREP  -l -E "<failure|<error" | sed -e "s|.*target/munged/surefire-reports/TEST-|                  |g" | sed -e "s|\.xml||g"`
     # With -fn mvn always exits with a 0 exit code.  Because of this we need to
     # find the errors instead of using the exit code.  We assume that if the build
     # failed a -1 is already given for that case
