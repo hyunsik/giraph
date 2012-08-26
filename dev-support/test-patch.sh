@@ -12,7 +12,7 @@
 #   limitations under the License.
 
 
-#set -x
+set -x
 ulimit -n 1024
 
 ### Setup some variables.  
@@ -422,8 +422,12 @@ checkJavadocWarnings () {
   echo ""
   echo "$MVN clean test javadoc:javadoc -DskipTests > $PATCH_DIR/patchJavadocWarnings.txt 2>&1"
   $MVN clean test javadoc:javadoc -DskipTests > $PATCH_DIR/patchJavadocWarnings.txt 2>&1
-  trunkJavadocWarnings=`$GREP '\[WARNING\]' $PATCH_DIR/trunkJavadocWarnings.txt | $AWK '/Javadoc Warnings/,EOF' | $GREP warning | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
-  patchJavadocWarnings=`$GREP '\[WARNING\]' $PATCH_DIR/patchJavadocWarnings.txt | $AWK '/Javadoc Warnings/,EOF' | $GREP warning | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
+
+  $GREP '\[WARNING\]' $PATCH_DIR/trunkJavadocWarnings.txt | $AWK '/Javadoc Warnings/,EOF' | $GREP warning > $PATCH_DIR/filteredTrunkJavadocWarnings.txt
+  $GREP '\[WARNING\]' $PATCH_DIR/patchJavadocWarnings.txt | $AWK '/Javadoc Warnings/,EOF' | $GREP warning > $PATCH_DIR/filteredPatchJavadocWarnings.txt
+
+  trunkJavadocWarnings=`cat $PATCH_DIR/filteredTrunkJavadocWarnings.txt | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
+  patchJavadocWarnings=`cat $PATCH_DIR/filteredPatchJavadocWarnings.txt | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
   echo ""
   echo ""
   echo "There appear to be $trunkJavadocWarnings javadoc warnings before the patch and $patchJavadocWarnings javadoc warnings after applying the patch."
