@@ -12,7 +12,7 @@
 #   limitations under the License.
 
 
-set -x
+#set -x
 ulimit -n 1024
 
 ### Setup some variables.  
