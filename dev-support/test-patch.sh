@@ -12,7 +12,7 @@
 #   limitations under the License.
 
 
-#set -x
+set -x
 ulimit -n 1024
 
 ### Setup some variables.  
@@ -557,14 +557,12 @@ $JIRA_COMMENT_FOOTER"
 
   ### calculate actual patchStyleErrors
   patchStyleErrors=0
-  if [[ $? != 0 ]] ; then
-    if [[ -f target/checkstyle-result.xml ]] ; then
-      $GREP '<ERROR' target/checkstyle-result.xml > $PATCH_DIR/filteredPatchedCheckstyleWarnings.txt
-      patchStyleErrors=`cat $PATCH_DIR/filteredPatchCheckstyleWarnings.txt | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
-      echo ""
-      echo ""
-      echo "There appear to be $patchCheckstyleWarnings checkstyle warnings after applying the patch."
-    fi
+  if [[ -f target/munged/checkstyle-result.xml ]] ; then
+    $GREP -i '<error' target/munged/checkstyle-result.xml > $PATCH_DIR/filteredPatchCheckstyleWarnings.txt
+    patchStyleErrors=`cat $PATCH_DIR/filteredPatchCheckstyleWarnings.txt | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
+    echo ""
+    echo ""
+    echo "There appear to be $patchCheckstyleWarnings checkstyle warnings after applying the patch."
   fi
 
   if [[ $patchStyleErrors != 0 ]] ; then
