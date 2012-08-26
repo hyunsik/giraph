@@ -562,7 +562,7 @@ $JIRA_COMMENT_FOOTER"
     patchStyleErrors=`cat $PATCH_DIR/filteredPatchCheckstyleWarnings.txt | $AWK 'BEGIN {total = 0} {total += 1} END {print total}'`
     echo ""
     echo ""
-    echo "There appear to be $patchCheckstyleWarnings checkstyle warnings after applying the patch."
+    echo "There appear to be $patchStyleErrors checkstyle warnings after applying the patch."
   fi
 
   if [[ $patchStyleErrors != 0 ]] ; then
